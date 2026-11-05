@@ -1,27 +1,16 @@
-import type { Asset } from '../../../types/collage';
-export type Crop = {left:number;top:number;right:number;bottom:number};
-export const fullCrop:Crop={left:0,top:0,right:0,bottom:0};
-export function loadImage(src:string):Promise<HTMLImageElement>{return new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(img);img.onerror=()=>reject(new Error('No se pudo abrir la imagen'));img.src=src})}
-export async function processImage(asset:Asset, options:{crop?:Crop;removeWhite?:boolean;tolerance?:number}):Promise<Asset>{
- const img=await loadImage(asset.src);const crop=options.crop??fullCrop;
- const left=Math.round(img.naturalWidth*crop.left/100),top=Math.round(img.naturalHeight*crop.top/100);
- const width=Math.max(1,img.naturalWidth-left-Math.round(img.naturalWidth*crop.right/100));
- const height=Math.max(1,img.naturalHeight-top-Math.round(img.naturalHeight*crop.bottom/100));
- const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
- const ctx=canvas.getContext('2d',{willReadFrequently:true});if(!ctx)throw new Error('Canvas no disponible');
- ctx.drawImage(img,left,top,width,height,0,0,width,height);
- if(options.removeWhite){const image=ctx.getImageData(0,0,width,height);const d=image.data;
- // Flood fill: only near-white regions connected to image borders. Interior white details remain intact.
- const visited=new Uint8Array(width*height);const queue=new Int32Array(width*height);let head=0,tail=0;
- const tol=options.tolerance??35;
- const white=(i:number)=>{const p=i*4;return d[p]>=255-tol&&d[p+1]>=255-tol&&d[p+2]>=255-tol&&d[p+3]>0};
- const push=(i:number)=>{if(!visited[i]&&white(i)){visited[i]=1;queue[tail++]=i}};
- for(let x=0;x<width;x++){push(x);push((height-1)*width+x)}
- for(let y=0;y<height;y++){push(y*width);push(y*width+width-1)}
- while(head<tail){const i=queue[head++],x=i%width,y=Math.floor(i/width);if(x>0)push(i-1);if(x<width-1)push(i+1);if(y>0)push(i-width);if(y<height-1)push(i+width)}
- // Feather a thin boundary for softer edges, without removing white interiors.
- for(let i=0;i<visited.length;i++)if(visited[i])d[i*4+3]=0;
- ctx.putImageData(image,0,0);
- }
- return {...asset,id:crypto.randomUUID(),name:asset.name.replace(/(\.[^.]+)?$/,'-recorte.png'),src:canvas.toDataURL('image/png'),width,height};
+import type {Asset} from '../../../types/collage';
+export function loadImage(src:string):Promise<HTMLImageElement>{return new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(img);img.onerror=()=>reject(new Error('No se pudo cargar la imagen'));img.src=src})}
+export async function sourceCanvas(src:string,maxSide=1000){const img=await loadImage(src);const scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));const ctx=canvas.getContext('2d',{willReadFrequently:true})!;ctx.drawImage(img,0,0,canvas.width,canvas.height);return canvas}
+export function imageMask(canvas:HTMLCanvasElement){const ctx=canvas.getContext('2d',{willReadFrequently:true})!;const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;return Uint8ClampedArray.from({length:canvas.width*canvas.height},(_,i)=>pixels[i*4+3])}
+export async function autoMask(src:string,canvas:HTMLCanvasElement):Promise<Uint8ClampedArray>{
+ const {removeBackground}=await import('@imgly/background-removal');
+ const blob=await removeBackground(src,{progress:()=>{}});
+ const url=URL.createObjectURL(blob);
+ try{const img=await loadImage(url);const temp=document.createElement('canvas');temp.width=canvas.width;temp.height=canvas.height;temp.getContext('2d')!.drawImage(img,0,0,temp.width,temp.height);return imageMask(temp)}finally{URL.revokeObjectURL(url)}
 }
+// Flood fill constrained by RGB similarity to the seed; suitable for refining AI masks.
+export function quickSelect(canvas:HTMLCanvasElement,mask:Uint8ClampedArray,x:number,y:number,add:boolean,tolerance:number){const w=canvas.width,h=canvas.height,sx=Math.floor(x),sy=Math.floor(y);if(sx<0||sy<0||sx>=w||sy>=h)return mask;const data=canvas.getContext('2d',{willReadFrequently:true})!.getImageData(0,0,w,h).data;const seed=(sy*w+sx)*4;const base=[data[seed],data[seed+1],data[seed+2]];const visited=new Uint8Array(w*h);const queue=new Int32Array(w*h);let head=0,tail=0;const start=sy*w+sx;queue[tail++]=start;visited[start]=1;const next=new Uint8ClampedArray(mask);const maxDistance=tolerance*4.42;while(head<tail){const i=queue[head++],p=i*4;const distance=Math.hypot(data[p]-base[0],data[p+1]-base[1],data[p+2]-base[2]);if(distance>maxDistance)continue;next[i]=add?255:0;const xx=i%w,yy=Math.floor(i/w);const push=(j:number)=>{if(!visited[j]){visited[j]=1;queue[tail++]=j}};if(xx>0)push(i-1);if(xx<w-1)push(i+1);if(yy>0)push(i-w);if(yy<h-1)push(i+w)}return next}
+export function paintMask(mask:Uint8ClampedArray,w:number,h:number,x:number,y:number,r:number,add:boolean){const next=new Uint8ClampedArray(mask);for(let yy=Math.max(0,Math.floor(y-r));yy<=Math.min(h-1,Math.ceil(y+r));yy++)for(let xx=Math.max(0,Math.floor(x-r));xx<=Math.min(w-1,Math.ceil(x+r));xx++)if((xx-x)**2+(yy-y)**2<=r*r)next[yy*w+xx]=add?255:0;return next}
+export function renderMask(canvas:HTMLCanvasElement,mask:Uint8ClampedArray,mode:'preview'|'overlay'){const ctx=canvas.getContext('2d',{willReadFrequently:true})!;const image=ctx.getImageData(0,0,canvas.width,canvas.height);for(let i=0;i<mask.length;i++){const p=i*4;if(mode==='preview'){image.data[p+3]=Math.round(image.data[p+3]*mask[i]/255)}else{if(mask[i]>127){image.data[p]=Math.round(image.data[p]*.65+150*.35);image.data[p+1]=Math.round(image.data[p+1]*.65+100*.35);image.data[p+2]=Math.round(image.data[p+2]*.65+255*.35)}}}ctx.putImageData(image,0,0);return canvas}
+export async function cutoutAsset(asset:Asset,canvas:HTMLCanvasElement,mask:Uint8ClampedArray):Promise<Asset>{if(!mask.some(v=>v>0))throw new Error('La selección está vacía');const output=document.createElement('canvas');output.width=canvas.width;output.height=canvas.height;output.getContext('2d')!.drawImage(canvas,0,0);renderMask(output,mask,'preview');const ctx=output.getContext('2d')!;const d=ctx.getImageData(0,0,output.width,output.height).data;let left=output.width,top=output.height,right=0,bottom=0;for(let y=0;y<output.height;y++)for(let x=0;x<output.width;x++)if(d[(y*output.width+x)*4+3]>8){left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y)}if(right<left)throw new Error('La selección está vacía');const result=document.createElement('canvas');result.width=right-left+1;result.height=bottom-top+1;result.getContext('2d')!.drawImage(output,left,top,result.width,result.height,0,0,result.width,result.height);return {id:crypto.randomUUID(),name:asset.name.replace(/\.[^.]+$/,'')+'-recorte.png',src:result.toDataURL('image/png'),width:result.width,height:result.height,segmented:true}}
+export async function automaticCutout(asset:Asset){const canvas=await sourceCanvas(asset.src);const mask=await autoMask(asset.src,canvas);return cutoutAsset(asset,canvas,mask)}

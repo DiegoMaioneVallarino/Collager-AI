@@ -1,0 +1,6 @@
+import {useCollageStore} from '../../../store/useCollageStore';
+import type {CollageSettings} from '../algorithms/randomCollage';
+const fields:[keyof CollageSettings,string][]=[['size','Tamaño de objetos'],['density','Densidad / intentos'],['rotation','Rotación aleatoria'],['variation','Variación de escala'],['overlap','Desplazamiento / caos']];
+export function CompositionControls(){const settings=useCollageStore(s=>s.settings),setSettings=useCollageStore(s=>s.setSettings),generate=useCollageStore(s=>s.generateRandom),busy=useCollageStore(s=>s.generating),count=useCollageStore(s=>s.assets.filter(a=>a.segmented).length);
+ return <section className="panel"><h2>Composición procedural</h2><p className="hint">Solo utiliza imágenes segmentadas. Repite los recortes para cubrir el lienzo.</p>{fields.map(([key,label])=><label className="slider-field" key={key}>{label} · {settings[key]}%<input type="range" min="0" max="100" value={settings[key]} onChange={e=>setSettings({[key]:Number(e.target.value)})}/></label>)}<button className="primary full" disabled={!count||busy} onClick={()=>void generate()}>{busy?'Generando…':'✦ Regenerar collage'}</button><p className="hint">{count} recursos segmentados disponibles. Cada generación cambia la distribución.</p></section>
+}
