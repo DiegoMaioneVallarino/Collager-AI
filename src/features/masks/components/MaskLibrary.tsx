@@ -1,0 +1,6 @@
+import {useEffect,useState} from 'react';
+import type {SavedMask} from '../../../types/mask';
+import {readMasks,deleteMask} from '../services/maskDatabase';
+import {rasterMask} from '../services/maskRenderer';
+import {MaskStudio} from './MaskStudio';
+export function MaskLibrary(){const [masks,setMasks]=useState<SavedMask[]>([]);const [editing,setEditing]=useState<SavedMask|null|undefined>(undefined);const [error,setError]=useState('');const refresh=()=>{void readMasks().then(setMasks).catch(e=>setError(String(e)))};useEffect(refresh,[]);return <section className="panel"><h2>Máscaras · {masks.length}</h2><p className="hint">Formas reutilizables, independientes de las imágenes.</p><button className="primary full" onClick={()=>setEditing(null)}>+ Crear máscara</button><div className="mask-list">{masks.map(m=><div key={m.id} className="mask-item"><img src={rasterMask(m).toDataURL()} alt={m.name}/><span>{m.name}</span><button onClick={()=>setEditing(m)}>Editar / Rellenar</button><button title="Eliminar máscara" onClick={()=>{void deleteMask(m.id).then(refresh)}}>×</button></div>)}</div>{error&&<p className="hint">{error}</p>}{editing!==undefined&&<MaskStudio initial={editing||undefined} onClose={()=>setEditing(undefined)} onSaved={refresh}/>}</section>}
